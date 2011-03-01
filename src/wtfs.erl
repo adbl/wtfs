@@ -13,7 +13,6 @@ start(Mountpoint) ->
     spawn(?MODULE, init, [Mountpoint]).
 
 init(Mountpoint) ->
-    register(complex, self()),
     Port = open_port({spawn_driver, ?DRIVER ++ " " ++ Mountpoint}, []),
     loop(Port).
 
