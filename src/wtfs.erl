@@ -1,21 +1,21 @@
 -module(wtfs).
--export([start/2, stop/0, init/1]).
+-export([start/1, init/1]).
 
-start(Path, SharedLib) ->
-    case erl_ddll:try_load(Path, SharedLib, [{driver_options,[kill_ports]}]) of
+-define(DRIVER, "wtfs_drv").
+
+start(Mountpoint) ->
+    case erl_ddll:try_load(code:priv_dir(wtfs), ?DRIVER,
+                           [{driver_options,[kill_ports]}]) of
 	{ok, loaded} -> ok;
 	{ok, already_loaded} -> ok;
 	Error -> exit(Error)
     end,
-    spawn(?MODULE, init, [SharedLib]).
+    spawn(?MODULE, init, [Mountpoint]).
 
-init(SharedLib) ->
+init(Mountpoint) ->
     register(complex, self()),
-    Port = open_port({spawn_driver, SharedLib}, []),
+    Port = open_port({spawn_driver, ?DRIVER ++ " " ++ Mountpoint}, []),
     loop(Port).
-
-stop() ->
-    complex ! stop.
 
 loop(Port) ->
     receive
