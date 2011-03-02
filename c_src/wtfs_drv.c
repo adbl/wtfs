@@ -94,9 +94,6 @@ static void port_ready_input(ErlDrvData handle, ErlDrvEvent event) {
         fprintf(stderr, "fuse: failed to allocate read buffer\n");
     /*     return -1; */
     }
-    else {
-        fprintf(stderr, "fuse: allocated MEMORY\n");
-    }
 
     /* Query the exited status of a session */
     /* while (!fuse_session_exited(se)) { */
@@ -108,9 +105,7 @@ static void port_ready_input(ErlDrvData handle, ErlDrvEvent event) {
         /* if (res <= 0) */
         /*     break; */
         /* Process a raw request */
-        fprintf(stderr, "received!\n");
         fuse_session_process(data->session, buf, res, tmpch);
-        fprintf(stderr, "processed!\n");
     /* } */
 
     driver_free(buf);
@@ -149,7 +144,6 @@ static ErlDrvData port_start(ErlDrvPort port, char* command) {
 
                 ErlDrvEvent event =
                     (ErlDrvEvent) (intptr_t) fuse_chan_fd(channel);
-                printf("fuse_chan_df: %d\n", (int) event);
                 if (driver_select(port, event, ERL_DRV_READ | ERL_DRV_USE, 1)
                     == 0) {
                     /* ERL_DRV_USE should be set together with the first
