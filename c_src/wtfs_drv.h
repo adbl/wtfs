@@ -10,7 +10,7 @@ typedef struct {
     char* mountpoint;
     struct fuse_chan* channel;
     struct fuse_session* session;
-    ErlDrvEvent event;
+    ErlDrvEvent event; /* fuse file descriptor, used in port_stop */
 } port_data;
 
 

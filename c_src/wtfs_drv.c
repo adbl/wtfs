@@ -151,6 +151,7 @@ static ErlDrvData port_start(ErlDrvPort port, char* command) {
                     data->mountpoint = mountpoint;
                     data->channel = channel;
                     data->session = session;
+                    data->event = event;
                     return (ErlDrvData) data;
                 }
             }
