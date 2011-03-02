@@ -119,7 +119,7 @@ static void port_ready_input(ErlDrvData handle, ErlDrvEvent event) {
     /* return res < 0 ? -1 : 0; */
 }
 
-
+/* This is called when the driver is instantiated */
 static ErlDrvData port_start(ErlDrvPort port, char* command) {
     printf("port_start: %s\n", command);
     /* TODO: use command to get mountpoint */
@@ -150,13 +150,13 @@ static ErlDrvData port_start(ErlDrvPort port, char* command) {
                 ErlDrvEvent event =
                     (ErlDrvEvent) (intptr_t) fuse_chan_fd(channel);
                 printf("fuse_chan_df: %d\n", (int) event);
-                /* ERL_DRV_USE? */
-                if (driver_select(port, event, 1, ERL_DRV_READ) == 0) {
+                if (driver_select(port, event, ERL_DRV_READ | ERL_DRV_USE, 1)
+                    == 0) {
+                    /* ERL_DRV_USE should be set together with the first
+                       event, in port_ready_input? */
+                    data->mountpoint = mountpoint;
                     data->channel = channel;
                     data->session = session;
-                    data->mountpoint = mountpoint;
-                    /* /\* Enter a multi-threaded event loop *\/ */
-                    /* err = fuse_session_loop_mt(session); */
                     return (ErlDrvData) data;
                 }
             }
@@ -178,7 +178,10 @@ static ErlDrvData port_start(ErlDrvPort port, char* command) {
 static void port_stop(ErlDrvData handle) {
     printf("port_stop\n");
     port_data* data = (port_data*) handle;
-
+    /* clear all events (and wait for port_stop_select callback?) */
+    driver_select(data->port, data->event, ERL_DRV_USE, 0);
+    /* stop listening for events */
+    driver_select(data->port, data->event, ERL_DRV_READ, 0);
     /* Restore default signal handlers */
     fuse_remove_signal_handlers(data->session);
     /* Remove a channel from a session */
@@ -189,6 +192,10 @@ static void port_stop(ErlDrvData handle) {
     fuse_unmount(data->mountpoint, data->channel);
 
     driver_free((char*) handle);
+}
+
+static void port_stop_select(ErlDrvEvent event, void* reserved) {
+    printf("port_stop_select\n");
 }
 
 ErlDrvEntry driver_entry = {
@@ -220,10 +227,10 @@ ErlDrvEntry driver_entry = {
     ERL_DRV_EXTENDED_MAJOR_VERSION,
     ERL_DRV_EXTENDED_MINOR_VERSION,
     0,                /* driver flags */
-    NULL,             /* reserver */
+    NULL,             /* reserved */
     NULL,             /* void (*process_exit)(ErlDrvData drv_data,
                                               ErlDrvMonitor *monitor) */
-    NULL              /* void (*stop_select)(ErlDrvEvent event,
+    port_stop_select  /* void (*stop_select)(ErlDrvEvent event,
                                              void* reserved) */
 };
 

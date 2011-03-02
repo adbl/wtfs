@@ -7,9 +7,10 @@
 
 typedef struct {
     ErlDrvPort port;
+    char* mountpoint;
     struct fuse_chan* channel;
     struct fuse_session* session;
-    char* mountpoint;
+    ErlDrvEvent event;
 } port_data;
 
 
