@@ -1,7 +1,8 @@
 #define FUSE_USE_VERSION 26
 
-#include <fuse_lowlevel.h>
 #include <stdio.h>
+#include <errno.h>
+#include <fuse_lowlevel.h>
 #include "erl_driver.h"
 
 #include "wtfs_drv.h"
@@ -34,7 +35,7 @@ static void op_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
     fuse_reply_err(req, 1);
 }
 
-const struct fuse_lowlevel_ops operations = {
+const struct fuse_lowlevel_ops ops = {
     /* op_init, */
     /* op_destroy, */
     .lookup  = op_lookup,
@@ -85,33 +86,156 @@ static void port_ready_input(ErlDrvData handle, ErlDrvEvent event) {
     port_data* data = (port_data*) handle;
 
     int res = 0;
-    /* Iterate over the channels assigned to a session */
-    struct fuse_chan *ch = fuse_session_next_chan(data->session, NULL);
-    /* Query the minimal receive buffer size */
-    size_t bufsize = fuse_chan_bufsize(ch);
-    char *buf = (char *) driver_alloc(bufsize);
-    if (!buf) {
-        fprintf(stderr, "fuse: failed to allocate read buffer\n");
-    /*     return -1; */
-    }
+    /* /\* Iterate over the channels assigned to a session *\/ */
+    /* struct fuse_chan *ch = fuse_session_next_chan(data->session, NULL); */
 
     /* Query the exited status of a session */
-    /* while (!fuse_session_exited(se)) { */
-        struct fuse_chan *tmpch = ch;
-        /* Receive a raw request */
-        res = fuse_chan_recv(&tmpch, buf, bufsize);
+    /* while (!fuse_session_exited(se)) {} */
+
+    struct fuse_chan *tmpch = data->channel;
+    /* Receive a raw request */
+    res = fuse_chan_recv(&tmpch, data->read_buffer, data->read_buffer_size);
+    if (res > 0) {
+        /* Process a raw request */
+        fuse_session_process(data->session, data->read_buffer, res, tmpch);
+    }
+    else {
+        fprintf(stderr, "fuse_chan_recv returned %d\n", res);
+        driver_failure(data->port, res);
+        /* ENODEV instead of fuse_session_exited? */
         /* if (res == -EINTR) */
         /*     continue; */
         /* if (res <= 0) */
         /*     break; */
-        /* Process a raw request */
-        fuse_session_process(data->session, buf, res, tmpch);
-    /* } */
+    }
 
-    driver_free(buf);
     /* Reset the exited status of a session */
     /* fuse_session_reset(se); */
     /* return res < 0 ? -1 : 0; */
+}
+
+int init_buffer(port_data* data) {
+    printf("init_buffer\n");
+    /* Query the minimal receive buffer size */
+    size_t size = fuse_chan_bufsize(data->channel);
+    char* buffer = (char *) driver_alloc(size);
+    if (buffer != NULL) {
+        data->read_buffer = buffer;
+        data->read_buffer_size = size;
+        return 0;
+    }
+    else {
+        fprintf(stderr, "failed to allocate read buffer\n");
+    }
+    return -1;
+}
+
+int init_event(port_data* data) {
+    printf("init_event\n");
+    ErlDrvEvent event = (ErlDrvEvent) (intptr_t) fuse_chan_fd(data->channel);
+    /* ERL_DRV_USE should be set together with the first event,
+       in port_ready_input? */
+    if (driver_select(data->port, event, ERL_DRV_READ | ERL_DRV_USE, 1) != -1) {
+        data->channel_fd = event;
+        if (init_buffer(data) != -1) {
+            return 0;
+        }
+        else {
+            /* clear all events (and wait for port_stop_select callback?) */
+            driver_select(data->port, data->channel_fd, ERL_DRV_USE, 0);
+            /* stop listening for events */
+            driver_select(data->port, data->channel_fd, ERL_DRV_READ, 0);
+        }
+    }
+    else {
+        fprintf(stderr, "failed to listen for events\n");
+    }
+    return -1;
+}
+
+int init_signals(port_data* data) {
+    printf("init_signals\n");
+    /* Exit session on HUP, TERM and INT signals and ignore PIPE */
+    if (fuse_set_signal_handlers(data->session) != -1) {
+        if (init_event(data) != -1) {
+            return 0;
+        }
+        else {
+            /* Restore default signal handlers */
+            fuse_remove_signal_handlers(data->session);
+        }
+    }
+    else {
+        fprintf(stderr, "failed to set up signal handlers\n");
+    }
+    return -1;
+}
+
+int init_session(struct fuse_args* args, port_data* data) {
+    printf("init_session\n");
+    /* Create a lowlevel session */
+    struct fuse_session* session;
+    session = fuse_lowlevel_new(args, &ops, sizeof(ops), NULL);
+    if (session != NULL) {
+        data->session = session;
+        /* Assign a channel to a session */
+        fuse_session_add_chan(session, data->channel);
+        if (init_signals(data) != -1) {
+            return 0;
+        }
+        else {
+            /* Destroy a session (and assigned channel) */
+            fuse_session_destroy(session);
+        }
+    }
+    else {
+        fprintf(stderr, "failed to create fuse session\n");
+    }
+    return -1;
+}
+
+int init_channel(struct fuse_args* args, char* mountpoint, port_data* data) {
+    printf("init_channel\n");
+    /* Create a FUSE mountpoint communication channel */
+    struct fuse_chan* channel = fuse_mount(mountpoint, args);
+    if (channel != NULL) {
+        data->channel = channel;
+        if (init_session(args, data) != -1) {
+            return 0;
+        }
+        else {
+            /* Umount a FUSE mountpoint */
+            fuse_unmount(mountpoint, channel);
+        }
+    }
+    else {
+        fprintf(stderr, "failed to create fuse mountpoint channel\n");
+    }
+    return -1;
+}
+
+int init_args(int argc, char* argv[], port_data* data) {
+    printf("init_args\n");
+    int ret = -1;
+    struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
+    char* mountpoint;
+    /* parse args and set mountpoint string (should be freed) */
+    /* TODO: "bad mount point `...': Transport endpoint is not connected" */
+    if (fuse_parse_cmdline(&args, &mountpoint, NULL, NULL) != -1) {
+        data->mountpoint = mountpoint;
+        if (init_channel(&args, mountpoint, data) != -1) {
+            ret = 0;
+        }
+        else {
+            driver_free(mountpoint);
+        }
+    }
+    else {
+        fprintf(stderr, "failed to parse fuse arguments\n");
+    }
+    /* Free the contents of argument list */
+    fuse_opt_free_args(&args);
+    return ret;
 }
 
 /* This is called when the driver is instantiated */
@@ -122,61 +246,23 @@ static ErlDrvData port_start(ErlDrvPort port, char* command) {
     port_data* data = (port_data*) driver_alloc(sizeof(port_data));
     data->port = port;
     int argc = 2;
-    char* argv[] = {"wtfs", "/tmp/fuse"};
+    char* argv[] = {"wtfs_drv", "/tmp/fuse"};
 
-    struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
-    struct fuse_chan* channel;
-    char* mountpoint;
-
-    /* parse args and set mountpoint string (should be freed) */
-    if (fuse_parse_cmdline(&args, &mountpoint, NULL, NULL) != -1 &&
-        /* Create a FUSE mountpoint communication channel */
-        (channel = fuse_mount(mountpoint, &args)) != NULL) {
-        struct fuse_session* session;
-        /* Create a lowlevel session */
-        session = fuse_lowlevel_new(&args, &operations,
-                                    sizeof(operations), NULL);
-        if (session != NULL) {
-            /* Exit session on HUP, TERM and INT signals and ignore PIPE */
-            if (fuse_set_signal_handlers(session) != -1) {
-                /* Assign a channel to a session */
-                fuse_session_add_chan(session, channel);
-
-                ErlDrvEvent event =
-                    (ErlDrvEvent) (intptr_t) fuse_chan_fd(channel);
-                if (driver_select(port, event, ERL_DRV_READ | ERL_DRV_USE, 1)
-                    == 0) {
-                    /* ERL_DRV_USE should be set together with the first
-                       event, in port_ready_input? */
-                    data->mountpoint = mountpoint;
-                    data->channel = channel;
-                    data->session = session;
-                    data->event = event;
-                    return (ErlDrvData) data;
-                }
-            }
-            /* Destroy a session */
-            fuse_session_destroy(session);
-        }
-        /* Umount a FUSE mountpoint */
-        fuse_unmount(mountpoint, channel);
+    if (init_args(argc, argv, data) != -1) {
+        return (ErlDrvData) data;
     }
-    /* Free the contents of argument list, the structure itself is not freed */
-    fuse_opt_free_args(&args);
-
-    /* ERL_DRV_ERROR_GENERAL
-       ERL_DRV_ERROR_ERRNO
-       ERL_DRV_ERROR_BADARG */
-    return ERL_DRV_ERROR_GENERAL;
+    else {
+        return ERL_DRV_ERROR_GENERAL;
+    }
 }
 
 static void port_stop(ErlDrvData handle) {
     printf("port_stop\n");
     port_data* data = (port_data*) handle;
     /* clear all events (and wait for port_stop_select callback?) */
-    driver_select(data->port, data->event, ERL_DRV_USE, 0);
+    driver_select(data->port, data->channel_fd, ERL_DRV_USE, 0);
     /* stop listening for events */
-    driver_select(data->port, data->event, ERL_DRV_READ, 0);
+    driver_select(data->port, data->channel_fd, ERL_DRV_READ, 0);
     /* Restore default signal handlers */
     fuse_remove_signal_handlers(data->session);
     /* Remove a channel from a session */
@@ -185,7 +271,10 @@ static void port_stop(ErlDrvData handle) {
     fuse_session_destroy(data->session);
     /* Umount a FUSE mountpoint */
     fuse_unmount(data->mountpoint, data->channel);
+    /* fuse_chan_destroy(data->channel); */
 
+    /* driver_free(data->mountpoint); */
+    driver_free(data->read_buffer);
     driver_free((char*) handle);
 }
 
