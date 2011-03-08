@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <errno.h>
 #include <fuse_lowlevel.h>
+#include <string.h>
 #include "erl_driver.h"
 
 #include "wtfs_drv.h"
@@ -241,19 +242,39 @@ int init_args(int argc, char* argv[], port_data* data) {
 /* This is called when the driver is instantiated */
 static ErlDrvData port_start(ErlDrvPort port, char* command) {
     printf("port_start: %s\n", command);
-    /* TODO: use command to get mountpoint */
+
+    const char delim = ' ';
+    int argc = 0;
+    char** argv;
+    char* arg;
+    if ((arg = strtok(command, &delim)) != NULL) {
+        argv = (char**) driver_alloc(sizeof(char*));
+        argv[0] = arg;
+        int i=0;
+        for (argc=1; (arg = strtok(NULL, &delim)) != NULL; ++argc) {
+            char** tmpargv = driver_alloc(sizeof(char*) * argc);
+            for (i=0; i<argc; i++) {
+                tmpargv[i] = argv[i];
+            }
+            tmpargv[argc] = arg;
+            driver_free(argv);
+            argv = tmpargv;
+        }
+    }
 
     port_data* data = (port_data*) driver_alloc(sizeof(port_data));
     data->port = port;
-    int argc = 2;
-    char* argv[] = {"wtfs_drv", "/tmp/fuse"};
 
+    ErlDrvData ret;
     if (init_args(argc, argv, data) != -1) {
-        return (ErlDrvData) data;
+        ret = (ErlDrvData) data;
     }
     else {
-        return ERL_DRV_ERROR_GENERAL;
+        driver_free(data);
+        ret = ERL_DRV_ERROR_GENERAL;
     }
+    driver_free(argv);
+    return ret;
 }
 
 static void port_stop(ErlDrvData handle) {
