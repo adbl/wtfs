@@ -116,7 +116,7 @@ static void port_ready_input(ErlDrvData handle, ErlDrvEvent event) {
 }
 
 int init_buffer(port_data* data) {
-    printf("init_buffer\n");
+    /* printf("init_buffer\n"); */
     /* Query the minimal receive buffer size */
     size_t size = fuse_chan_bufsize(data->channel);
     char* buffer = (char *) driver_alloc(size);
@@ -132,7 +132,7 @@ int init_buffer(port_data* data) {
 }
 
 int init_event(port_data* data) {
-    printf("init_event\n");
+    /* printf("init_event\n"); */
     ErlDrvEvent event = (ErlDrvEvent) (intptr_t) fuse_chan_fd(data->channel);
     /* ERL_DRV_USE should be set together with the first event,
        in port_ready_input? */
@@ -155,7 +155,7 @@ int init_event(port_data* data) {
 }
 
 int init_signals(port_data* data) {
-    printf("init_signals\n");
+    /* printf("init_signals\n"); */
     /* Exit session on HUP, TERM and INT signals and ignore PIPE */
     if (fuse_set_signal_handlers(data->session) != -1) {
         if (init_event(data) != -1) {
@@ -173,7 +173,7 @@ int init_signals(port_data* data) {
 }
 
 int init_session(struct fuse_args* args, port_data* data) {
-    printf("init_session\n");
+    /* printf("init_session\n"); */
     /* Create a lowlevel session */
     struct fuse_session* session;
     session = fuse_lowlevel_new(args, &ops, sizeof(ops), NULL);
@@ -196,7 +196,7 @@ int init_session(struct fuse_args* args, port_data* data) {
 }
 
 int init_channel(struct fuse_args* args, char* mountpoint, port_data* data) {
-    printf("init_channel\n");
+    /* printf("init_channel\n"); */
     /* Create a FUSE mountpoint communication channel */
     struct fuse_chan* channel = fuse_mount(mountpoint, args);
     if (channel != NULL) {
@@ -216,7 +216,7 @@ int init_channel(struct fuse_args* args, char* mountpoint, port_data* data) {
 }
 
 int init_args(int argc, char* argv[], port_data* data) {
-    printf("init_args\n");
+    /* printf("init_args\n"); */
     int ret = -1;
     struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
     char* mountpoint;
@@ -239,9 +239,35 @@ int init_args(int argc, char* argv[], port_data* data) {
     return ret;
 }
 
+/* /\* Parse erlang command string, returns ARGC and sets ARGV *\/ */
+/* static int args(char* command, char*** args) { */
+/*     const char delim = ' '; */
+/*     int argc = 0; */
+/*     char** argv; */
+/*     char* arg; */
+/*     if ((arg = strtok(command, &delim)) != NULL) { */
+/*         argv = (char**) driver_alloc(sizeof(char*)); */
+/*         argv[0] = arg; */
+/*         int i=0; */
+/*         for (argc=1; (arg = strtok(NULL, &delim)) != NULL; ++argc) { */
+/*             char** tmpargv = driver_alloc(sizeof(char*) * argc); */
+/*             for (i=0; i<argc; i++) { */
+/*                 tmpargv[i] = argv[i]; */
+/*             } */
+/*             tmpargv[argc] = arg; */
+/*             driver_free(argv); */
+/*             argv = tmpargv; */
+/*         } */
+/*     } */
+/*     args = &argv; */
+/*     return argc; */
+/* } */
+
 /* This is called when the driver is instantiated */
 static ErlDrvData port_start(ErlDrvPort port, char* command) {
-    printf("port_start: %s\n", command);
+    /* printf("port_start: %s\n", command); */
+    /* char** argv = NULL; */
+    /* int argc = args(command, &argv); */
 
     const char delim = ' ';
     int argc = 0;
@@ -262,14 +288,16 @@ static ErlDrvData port_start(ErlDrvPort port, char* command) {
         }
     }
 
+    /* int i; */
+    /* for (i=0; i<argc; i++) { */
+    /*     fprintf(stderr, "%d: %s\n", i, argv[i]); */
+    /* } */
+
     port_data* data = (port_data*) driver_alloc(sizeof(port_data));
     data->port = port;
 
-    ErlDrvData ret;
-    if (init_args(argc, argv, data) != -1) {
-        ret = (ErlDrvData) data;
-    }
-    else {
+    ErlDrvData ret = (ErlDrvData) data;
+    if (init_args(argc, argv, data) == -1) {
         driver_free(data);
         ret = ERL_DRV_ERROR_GENERAL;
     }
